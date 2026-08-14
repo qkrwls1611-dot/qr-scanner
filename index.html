@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
   <title>통합 QR 자동 스캐너</title>
+
   <style>
     *{box-sizing:border-box}
     body{margin:0;background:#f5f6fa;color:#222;font-family:-apple-system,BlinkMacSystemFont,"Noto Sans KR",Arial,sans-serif}
@@ -26,8 +27,10 @@
     .student-name{font-size:21px;font-weight:900}
     .small{margin-top:8px;color:#777;text-align:center;font-size:12px}
   </style>
+
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
 </head>
+
 <body>
   <header class="header">
     <h1>통합 QR 자동 출석</h1>
@@ -64,23 +67,31 @@ const SCANNER_KEY = "00b63e24-0f8c-4f3a-b34a-246fa64efa9692df311f-a87e-4a81-bf4c
 
 let selectedType = "입실";
 let stream = null;
-let processing = false;
 let lastToken = "";
 let lastProcessedAt = 0;
 let lastScanAt = 0;
 let useBackCamera = true;
+let scanAudioCtx = null;
+
 const SCAN_INTERVAL = 120;
+const DUPLICATE_BLOCK_MS = 2500;
 
 document.querySelectorAll(".type-button").forEach(btn => {
   btn.addEventListener("click", () => {
-    document.querySelectorAll(".type-button").forEach(x => x.classList.remove("active"));
+    document.querySelectorAll(".type-button").forEach(x => {
+      x.classList.remove("active");
+    });
+
     btn.classList.add("active");
     selectedType = btn.dataset.type;
+
+    unlockAudio();
   });
 });
 
 document.getElementById("switchCameraBtn").addEventListener("click", async () => {
   useBackCamera = !useBackCamera;
+  unlockAudio();
   await startCamera();
 });
 
@@ -90,13 +101,20 @@ async function startCamera() {
     stream = null;
   }
 
-  setStatus((useBackCamera ? "후면" : "전면") + " 카메라를 시작하는 중입니다.", "");
+  setStatus(
+    (useBackCamera ? "후면" : "전면") +
+    " 카메라를 시작하는 중입니다.",
+    ""
+  );
 
   try {
     const video = document.getElementById("video");
-    let constraints = {
+
+    const strictConstraints = {
       video: {
-        facingMode: { exact: useBackCamera ? "environment" : "user" },
+        facingMode: {
+          exact: useBackCamera ? "environment" : "user"
+        },
         width: { ideal: 1280 },
         height: { ideal: 720 }
       },
@@ -104,11 +122,15 @@ async function startCamera() {
     };
 
     try {
-      stream = await navigator.mediaDevices.getUserMedia(constraints);
-    } catch (e) {
+      stream = await navigator.mediaDevices.getUserMedia(
+        strictConstraints
+      );
+    } catch (error) {
       stream = await navigator.mediaDevices.getUserMedia({
         video: {
-          facingMode: { ideal: useBackCamera ? "environment" : "user" },
+          facingMode: {
+            ideal: useBackCamera ? "environment" : "user"
+          },
           width: { ideal: 1280 },
           height: { ideal: 720 }
         },
@@ -126,9 +148,11 @@ async function startCamera() {
     );
 
     requestAnimationFrame(scanFrame);
+
   } catch (err) {
     setStatus(
-      "카메라를 열 수 없습니다: " + (err.message || err.name || err),
+      "카메라를 열 수 없습니다: " +
+      (err.message || err.name || err),
       "error"
     );
   }
@@ -141,183 +165,318 @@ function scanFrame(timestamp) {
   lastScanAt = timestamp;
 
   const video = document.getElementById("video");
-  if (video.readyState !== video.HAVE_ENOUGH_DATA) return;
+
+  if (
+    video.readyState !== video.HAVE_ENOUGH_DATA
+  ) {
+    return;
+  }
 
   const vw = video.videoWidth;
   const vh = video.videoHeight;
+
   if (!vw || !vh) return;
 
-  const cropSize = Math.floor(Math.min(vw, vh) * 0.70);
-  const sx = Math.floor((vw - cropSize) / 2);
-  const sy = Math.floor((vh - cropSize) / 2);
+  const cropSize =
+    Math.floor(
+      Math.min(vw, vh) * 0.70
+    );
 
-  const target = Math.min(640, cropSize);
-  const canvas = document.getElementById("canvas");
-  const ctx = canvas.getContext("2d", {willReadFrequently:true});
+  const sx =
+    Math.floor(
+      (vw - cropSize) / 2
+    );
+
+  const sy =
+    Math.floor(
+      (vh - cropSize) / 2
+    );
+
+  const target =
+    Math.min(640, cropSize);
+
+  const canvas =
+    document.getElementById("canvas");
+
+  const ctx =
+    canvas.getContext(
+      "2d",
+      { willReadFrequently: true }
+    );
 
   canvas.width = target;
   canvas.height = target;
-  ctx.drawImage(video, sx, sy, cropSize, cropSize, 0, 0, target, target);
 
-  const imageData = ctx.getImageData(0, 0, target, target);
-  const qr = jsQR(
-  imageData.data,
-  target,
-  target,
-  { inversionAttempts: "dontInvert" }
-);
+  ctx.drawImage(
+    video,
+    sx,
+    sy,
+    cropSize,
+    cropSize,
+    0,
+    0,
+    target,
+    target
+  );
 
-if (!qr || !qr.data) return;
+  const imageData =
+    ctx.getImageData(
+      0,
+      0,
+      target,
+      target
+    );
 
-const now = Date.now();
+  const qr =
+    jsQR(
+      imageData.data,
+      target,
+      target,
+      {
+        inversionAttempts:
+          "dontInvert"
+      }
+    );
 
-if (
-  qr.data === lastToken &&
-  now - lastProcessedAt < 2500
-) return;
+  if (!qr || !qr.data) return;
 
-// QR 인식 성공 → 삑 소리
-playScanSound();
+  const now = Date.now();
 
-processToken(qr.data);
+  if (
+    qr.data === lastToken &&
+    now - lastProcessedAt <
+      DUPLICATE_BLOCK_MS
+  ) {
+    return;
+  }
+
+  // QR 인식 즉시 삑 1회
+  playScanSound();
+
+  processToken(qr.data);
 }
+
 function processToken(token) {
   lastToken = token;
   lastProcessedAt = Date.now();
 
-  // QR 읽자마자 바로 삑
-  playScanSound();
+  setStatus(
+    "출석 저장 중... 다음 학생도 바로 스캔할 수 있습니다.",
+    ""
+  );
 
-  // 서버 응답을 기다리는 동안에도 다음 QR을 읽을 수 있게 함
-  processing = false;
+  const callbackName =
+    "__scanCallback_" +
+    Date.now() +
+    "_" +
+    Math.random()
+      .toString(36)
+      .slice(2, 8);
 
-  setStatus("출석 저장 중...", "");
-
-  const callbackName = "__scanCallback_" + Date.now();
-  const script = document.createElement("script");
+  const script =
+    document.createElement(
+      "script"
+    );
 
   const cleanup = () => {
     try {
-      delete window[callbackName];
+      delete window[
+        callbackName
+      ];
     } catch (e) {}
 
-    script.remove();
+    if (script.parentNode) {
+      script.parentNode
+        .removeChild(script);
+    }
   };
 
-  const timeout = setTimeout(() => {
-    cleanup();
+  const timeout =
+    setTimeout(() => {
+      cleanup();
 
-    setStatus(
-      "서버 응답이 늦습니다. 출석로그를 확인해주세요.",
-      "error"
-    );
-  }, 7000);
-
-  window[callbackName] = function(result) {
-    clearTimeout(timeout);
-    cleanup();
-
-    if (!result || !result.success) {
       setStatus(
-        result && result.message
-          ? result.message
-          : "출석 처리에 실패했습니다.",
+        "서버 응답이 늦습니다. 출석로그를 확인해주세요.",
         "error"
       );
-      return;
-    }
+    }, 7000);
 
-    const student = result.student || {};
+  window[callbackName] =
+    function(result) {
+      clearTimeout(timeout);
+      cleanup();
 
-    setStatus(
-      '<div class="student-name">' +
-      esc(student.name) +
-      '</div>' +
-      esc(student.classroom || "") +
-      ' · ' +
-      esc(student.seat || "") +
-      '번<br>' +
-      '<strong>' +
-      esc(result.message || "") +
-      '</strong> · ' +
-      esc(result.processedAt || ""),
-      "success",
-      true
-    );
+      if (
+        !result ||
+        !result.success
+      ) {
+        setStatus(
+          result &&
+          result.message
+            ? result.message
+            : "출석 처리에 실패했습니다.",
+          "error"
+        );
+        return;
+      }
 
-    if (navigator.vibrate) {
-      navigator.vibrate(120);
-    }
-  };
+      const student =
+        result.student || {};
 
-  const params = new URLSearchParams({
-    action: "scan",
-    token: token,
-    type: selectedType,
-    key: SCANNER_KEY,
-    callback: callbackName,
-    _: String(Date.now())
-  });
+      setStatus(
+        '<div class="student-name">' +
+        esc(student.name) +
+        '</div>' +
+        esc(
+          student.classroom || ""
+        ) +
+        ' · ' +
+        esc(student.seat || "") +
+        '번<br>' +
+        '<strong>' +
+        esc(
+          result.message || ""
+        ) +
+        '</strong> · ' +
+        esc(
+          result.processedAt || ""
+        ),
+        "success",
+        true
+      );
+
+      if (navigator.vibrate) {
+        navigator.vibrate(120);
+      }
+    };
+
+  const params =
+    new URLSearchParams({
+      action: "scan",
+      token: token,
+      type: selectedType,
+      key: SCANNER_KEY,
+      callback: callbackName,
+      _: String(Date.now())
+    });
 
   script.src =
     API_URL +
     "?" +
     params.toString();
 
-  document.body.appendChild(script);
+  document.body
+    .appendChild(script);
 }
 
+function unlockAudio() {
+  try {
+    const AudioCtx =
+      window.AudioContext ||
+      window.webkitAudioContext;
 
-  const params = new URLSearchParams({
-    action: "scan",
-    token: token,
-    type: selectedType,
-    key: SCANNER_KEY,
-    callback: callbackName,
-    _: String(Date.now())
-  });
+    if (!AudioCtx) return;
 
-  script.src = API_URL + "?" + params.toString();
-  document.body.appendChild(script);
+    if (!scanAudioCtx) {
+      scanAudioCtx =
+        new AudioCtx();
+    }
+
+    if (
+      scanAudioCtx.state ===
+      "suspended"
+    ) {
+      scanAudioCtx.resume();
+    }
+  } catch (e) {}
 }
 
-function setStatus(text, type, html) {
-  const box = document.getElementById("status");
-  box.className = "status" + (type ? " " + type : "");
-  if (html) box.innerHTML = text;
-  else box.textContent = text;
+function playScanSound() {
+  try {
+    unlockAudio();
+
+    if (!scanAudioCtx) return;
+
+    const oscillator =
+      scanAudioCtx
+        .createOscillator();
+
+    const gain =
+      scanAudioCtx
+        .createGain();
+
+    oscillator.type =
+      "sine";
+
+    oscillator.frequency
+      .setValueAtTime(
+        1200,
+        scanAudioCtx.currentTime
+      );
+
+    gain.gain
+      .setValueAtTime(
+        0.28,
+        scanAudioCtx.currentTime
+      );
+
+    gain.gain
+      .exponentialRampToValueAtTime(
+        0.01,
+        scanAudioCtx.currentTime +
+          0.12
+      );
+
+    oscillator.connect(gain);
+    gain.connect(
+      scanAudioCtx.destination
+    );
+
+    oscillator.start();
+
+    oscillator.stop(
+      scanAudioCtx.currentTime +
+      0.12
+    );
+
+  } catch (e) {
+    console.log(
+      "스캔음 재생 실패",
+      e
+    );
+  }
+}
+
+function setStatus(
+  text,
+  type,
+  html
+) {
+  const box =
+    document.getElementById(
+      "status"
+    );
+
+  box.className =
+    "status" +
+    (type ? " " + type : "");
+
+  if (html) {
+    box.innerHTML = text;
+  } else {
+    box.textContent = text;
+  }
 }
 
 function esc(value) {
-  return String(value == null ? "" : value)
-    .replace(/&/g,"&amp;")
-    .replace(/</g,"&lt;")
-    .replace(/>/g,"&gt;")
-    .replace(/"/g,"&quot;")
-    .replace(/'/g,"&#039;");
-}
-
-
-let scanAudioCtx = null;
-function playScanSound() {
-  try {
-    const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    if (!AudioCtx) return;
-    if (!scanAudioCtx) scanAudioCtx = new AudioCtx();
-    if (scanAudioCtx.state === "suspended") scanAudioCtx.resume();
-    const oscillator = scanAudioCtx.createOscillator();
-    const gain = scanAudioCtx.createGain();
-    oscillator.type = "sine";
-    oscillator.frequency.setValueAtTime(1200, scanAudioCtx.currentTime);
-    gain.gain.setValueAtTime(0.28, scanAudioCtx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.01, scanAudioCtx.currentTime + 0.12);
-    oscillator.connect(gain);
-    gain.connect(scanAudioCtx.destination);
-    oscillator.start();
-    oscillator.stop(scanAudioCtx.currentTime + 0.12);
-  } catch (e) {
-    console.log("스캔음 재생 실패", e);
-  }
+  return String(
+    value == null ? "" : value
+  )
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
 
 startCamera();

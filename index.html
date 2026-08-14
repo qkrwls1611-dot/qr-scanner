@@ -420,14 +420,26 @@ function scanFrame(timestamp) {
   ctx.drawImage(video, sx, sy, cropSize, cropSize, 0, 0, target, target);
 
   const imageData = ctx.getImageData(0, 0, target, target);
-  const qr = jsQR(imageData.data, target, target, { inversionAttempts: "dontInvert" });
+  const qr = jsQR(
+  imageData.data,
+  target,
+  target,
+  { inversionAttempts: "dontInvert" }
+);
 
-  if (!qr || !qr.data) return;
+if (!qr || !qr.data) return;
 
-  const now = Date.now();
-  if (qr.data === lastToken && now - lastProcessedAt < 2500) return;
+const now = Date.now();
 
-  processToken(qr.data);
+if (
+  qr.data === lastToken &&
+  now - lastProcessedAt < 2500
+) return;
+
+// QR 인식 성공 → 삑 소리
+playScanSound();
+
+processToken(qr.data);
 }
 
 function processToken(token) {

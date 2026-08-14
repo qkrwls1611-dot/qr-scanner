@@ -137,7 +137,6 @@ async function startCamera() {
 function scanFrame(timestamp) {
   requestAnimationFrame(scanFrame);
 
-  if (processing) return;
   if (timestamp - lastScanAt < SCAN_INTERVAL) return;
   lastScanAt = timestamp;
 
@@ -182,26 +181,36 @@ playScanSound();
 
 processToken(qr.data);
 }
-
 function processToken(token) {
-  processing = true;
   lastToken = token;
   lastProcessedAt = Date.now();
 
-  setStatus("출석 처리 중...", "");
+  // QR 읽자마자 바로 삑
+  playScanSound();
+
+  // 서버 응답을 기다리는 동안에도 다음 QR을 읽을 수 있게 함
+  processing = false;
+
+  setStatus("출석 저장 중...", "");
 
   const callbackName = "__scanCallback_" + Date.now();
   const script = document.createElement("script");
 
   const cleanup = () => {
-    try { delete window[callbackName]; } catch(e) {}
+    try {
+      delete window[callbackName];
+    } catch (e) {}
+
     script.remove();
   };
 
   const timeout = setTimeout(() => {
     cleanup();
-    processing = false;
-    setStatus("서버 응답이 늦습니다. QR을 다시 보여주세요.", "error");
+
+    setStatus(
+      "서버 응답이 늦습니다. 출석로그를 확인해주세요.",
+      "error"
+    );
   }, 7000);
 
   window[callbackName] = function(result) {
@@ -209,32 +218,55 @@ function processToken(token) {
     cleanup();
 
     if (!result || !result.success) {
-      processing = false;
       setStatus(
-        result && result.message ? result.message : "출석 처리에 실패했습니다.",
+        result && result.message
+          ? result.message
+          : "출석 처리에 실패했습니다.",
         "error"
       );
       return;
     }
 
-    const s = result.student || {};
+    const student = result.student || {};
 
     setStatus(
-      '<div class="student-name">' + esc(s.name) + '</div>' +
-      esc(s.classroom || "") + ' · ' + esc(s.seat || "") + '번<br>' +
-      '<strong>' + esc(result.message || "") + '</strong> · ' +
+      '<div class="student-name">' +
+      esc(student.name) +
+      '</div>' +
+      esc(student.classroom || "") +
+      ' · ' +
+      esc(student.seat || "") +
+      '번<br>' +
+      '<strong>' +
+      esc(result.message || "") +
+      '</strong> · ' +
       esc(result.processedAt || ""),
       "success",
       true
     );
 
-    if (navigator.vibrate) navigator.vibrate(120);
-
-    setTimeout(() => {
-      processing = false;
-      setStatus("다음 학생 QR을 보여주세요.", "");
-    }, 700);
+    if (navigator.vibrate) {
+      navigator.vibrate(120);
+    }
   };
+
+  const params = new URLSearchParams({
+    action: "scan",
+    token: token,
+    type: selectedType,
+    key: SCANNER_KEY,
+    callback: callbackName,
+    _: String(Date.now())
+  });
+
+  script.src =
+    API_URL +
+    "?" +
+    params.toString();
+
+  document.body.appendChild(script);
+}
+
 
   const params = new URLSearchParams({
     action: "scan",
